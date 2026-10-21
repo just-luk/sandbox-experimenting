@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-"""Run the sandbox awareness scenarios against a local Ollama model."""
-
 import argparse
 import json
 import subprocess
@@ -100,6 +97,17 @@ def generate(base_url, model, prompt, temperature, timeout):
     request = urllib.request.Request(
         f"{base_url.rstrip('/')}/api/generate",
         data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read())
+
+
+def call_ollama(base_url, payload, timeout):
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/api/chat",
+        data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
