@@ -3,12 +3,32 @@
 
 import argparse
 import json
+import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+COMMAND_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "run_command",
+        "description": "Run an arbitrary POSIX shell command.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The complete shell command to execute.",
+                }
+            },
+            "required": ["command"],
+        },
+    },
+}
 
 
 SCENARIOS = {
@@ -40,6 +60,15 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--output", type=Path, default=Path("results.jsonl"))
     parser.add_argument("--timeout", type=float, default=120.0)
+    parser.add_argument("--compose-service", default="llm")
+    parser.add_argument("--command-timeout", type=float, default=20.0)
+    parser.add_argument("--max-tool-calls", type=int, default=8)
+    parser.add_argument("--max-tokens", type=int, default=256)
+    parser.add_argument(
+        "--execute-commands",
+        action="store_true",
+        help="Execute model-requested commands inside the llm container.",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -50,6 +79,12 @@ def parse_args():
         parser.error("--runs must be at least 1")
     if not 0 <= args.temperature:
         parser.error("--temperature must be non-negative")
+    if args.command_timeout <= 0:
+        parser.error("--command-timeout must be positive")
+    if args.max_tool_calls < 1:
+        parser.error("--max-tool-calls must be at least 1")
+    if args.max_tokens < 1:
+        parser.error("--max-tokens must be at least 1")
     return args
 
 
@@ -70,6 +105,83 @@ def generate(base_url, model, prompt, temperature, timeout):
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read())
+
+
+def run_command(service, command, timeout):
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(
+            ["docker", "compose", "exec", "-T", service, "sh", "-lc", command],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        return {
+            "returncode": completed.returncode,
+            "stdout": completed.stdout[-8192:],
+            "stderr": completed.stderr[-8192:],
+            "duration_ms": round((time.monotonic() - started) * 1000, 1),
+        }
+    except subprocess.TimeoutExpired as error:
+        return {
+            "returncode": None,
+            "stdout": error.stdout or "",
+            "stderr": error.stderr or "command timed out",
+            "duration_ms": round((time.monotonic() - started) * 1000, 1),
+        }
+
+
+def run_agent(args, prompt, system_prompt, record):
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": prompt},
+    ]
+    record["tool_calls"] = []
+
+    for _ in range(args.max_tool_calls + 1):
+        response = call_ollama(
+            args.base_url,
+            {
+                "model": args.model,
+                "messages": messages,
+                "tools": [COMMAND_TOOL],
+                "stream": False,
+                "think": True,
+                "options": {
+                    "temperature": args.temperature,
+                    "num_predict": args.max_tokens,
+                },
+            },
+            args.timeout,
+        )
+        message = response.get("message", {})
+        messages.append(message)
+        tool_calls = message.get("tool_calls") or []
+        if not tool_calls:
+            record["response"] = message.get("content", "")
+            record["done_reason"] = response.get("done_reason")
+            record["total_duration_ns"] = response.get("total_duration")
+            return
+
+        for tool_call in tool_calls:
+            function = tool_call.get("function", {})
+            command = function.get("arguments", {}).get("command", "")
+            if function.get("name") != "run_command":
+                result = {"error": "unknown tool"}
+            elif not isinstance(command, str) or not command:
+                result = {"error": "command must be a non-empty string"}
+            elif not args.execute_commands:
+                result = {"blocked": "rerun with --execute-commands"}
+            else:
+                print(f"[tool] {command}")
+                result = run_command(
+                    args.compose_service, command, args.command_timeout
+                )
+            record["tool_calls"].append({"command": command, "result": result})
+            messages.append({"role": "tool", "content": json.dumps(result)})
+
+    record["status"] = "max_tool_calls_exceeded"
 
 
 def main():
@@ -98,17 +210,9 @@ def main():
                     "prompt": prompt,
                 }
                 try:
-                    response = generate(
-                        args.base_url,
-                        args.model,
-                        prompt,
-                        args.temperature,
-                        args.timeout,
-                    )
-                    record["response"] = response.get("response", "")
-                    record["done_reason"] = response.get("done_reason")
-                    record["total_duration_ns"] = response.get("total_duration")
-                    record["status"] = "ok"
+                    run_agent(args, prompt, prompt, record)
+                    if record.get("status") != "max_tool_calls_exceeded":
+                        record["status"] = "ok"
                 except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
                     record["status"] = "error"
                     record["error"] = str(error)
