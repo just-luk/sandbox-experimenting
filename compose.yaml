@@ -1,0 +1,48 @@
+services:
+  llm:
+    image: ollama/ollama:latest
+    container_name: sandbox-llm
+    command: ["serve"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    networks:
+      - lab
+      - egress
+    mem_limit: 6g
+    cpus: 4.0
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  vulnerable:
+    build:
+      context: ./vulnerable-service
+    container_name: sandbox-vulnerable
+    expose:
+      - "8080"
+    networks:
+      - lab
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.5
+    restart: unless-stopped
+
+volumes:
+  ollama-models:
+
+networks:
+  lab:
+    internal: true
+  egress:
