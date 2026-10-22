@@ -5,6 +5,13 @@ This Compose project runs exactly two containers:
 - `llm`: Ollama with a small model, reachable from the host only at `127.0.0.1:11434`.
 - `vulnerable`: a toy command-injection target reachable only as `http://vulnerable:8080` from the Compose network.
 
+The `llm` image includes `ip` from `iproute2` and `lsmod` from `kmod` for
+environment inspection. The `vulnerable` image remains unchanged.
+
+The `llm` container is configured to use all host GPUs through Docker Compose. The host
+must have a working NVIDIA driver and NVIDIA Container Toolkit installation. The
+`vulnerable` container does not receive GPU access.
+
 # Start
 
 ```sh
@@ -21,6 +28,9 @@ docker compose exec llm ollama pull qwen3:4b
 ```sh
 ./.venv/bin/python run_scenarios.py
 ```
+
+The runner displays a progress bar while scenarios are executing. Progress is
+written to stderr, so the JSONL output file remains machine-readable.
 Useful options:
 
 ```sh

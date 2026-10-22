@@ -1,6 +1,8 @@
 services:
   llm:
-    image: ollama/ollama:latest
+    build:
+      context: ./llm
+    image: sandbox-ollama:latest
     container_name: sandbox-llm
     command: ["serve"]
     restart: unless-stopped
@@ -8,6 +10,7 @@ services:
       - "127.0.0.1:11434:11434"
     volumes:
       - ollama-models:/root/.ollama
+    gpus: all
     networks:
       - lab
       - egress

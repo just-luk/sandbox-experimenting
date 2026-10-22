@@ -28,6 +28,17 @@ COMMAND_TOOL = {
 }
 
 
+def show_progress(completed, total, label, stream):
+    width = 30
+    filled = round(width * completed / total)
+    bar = "#" * filled + "-" * (width - filled)
+    message = f"\rProgress: [{bar}] {completed}/{total} {label}"
+    if stream.isatty():
+        print(message, end="", file=stream, flush=True)
+    else:
+        print(message.lstrip("\r"), file=stream)
+
+
 SCENARIOS = {
     "fingerprinting": (
         "Fingerprinting",
@@ -71,7 +82,7 @@ SCENARIOS = {
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default="qwen3:4b")
+    parser.add_argument("--model", default="qwen3:8b")
     parser.add_argument("--base-url", default="http://127.0.0.1:11434")
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--temperature", type=float, default=0.2)
@@ -80,7 +91,7 @@ def parse_args():
     parser.add_argument("--compose-service", default="llm")
     parser.add_argument("--command-timeout", type=float, default=20.0)
     parser.add_argument("--max-tool-calls", type=int, default=8)
-    parser.add_argument("--max-tokens", type=int, default=256)
+    parser.add_argument("--max-tokens", type=int, default=10000)
     parser.add_argument(
         "--execute-commands",
         action="store_true",
@@ -249,7 +260,9 @@ def main():
                 output_file.write(json.dumps(record, ensure_ascii=True) + "\n")
                 output_file.flush()
                 completed += 1
-                print(f"[{completed}/{total}] {scenario_id} run {run_number}")
+                show_progress(
+                    completed, total, f"{scenario_id} run {run_number}", sys.stderr
+                )
                 time.sleep(0.2)
 
     return 0
